@@ -3,7 +3,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import Controls from './Controls';
 import PrintPreview from './PrintPreview';
-import parseTallyXML from './parseTallyXML';
+import parseTallyXML from './parseTallyXML'; // Now expects a string
 
 export default function App() {
   const [xmlData, setXmlData] = useState(null);
@@ -56,67 +56,95 @@ export default function App() {
     if (!printRef.current) return alert("Nothing to print");
     if (!('usb' in navigator)) return alert("WebUSB not supported");
 
+    // Get the innerText from the PrintPreview component
     const text = printRef.current.innerText;
-    const encoder = new TextEncoder();
-    const feed = new Uint8Array([0x0A, 0x0A, 0x0A]);
-    const cut = new Uint8Array([0x1D, 0x56, 0x41, 0x00]); // Full cut
+    const encoder = new TextEncoder(); // Encodes string to UTF-8 bytes
+    const feed = new Uint8Array([0x0A, 0x0A, 0x0A]); // Line feeds
+    const cut = new Uint8Array([0x1D, 0x56, 0x41, 0x00]); // Full cut command for ESC/POS
 
     try {
       console.log("[🖨] Requesting USB device...");
+      // Request permission to access a USB device. Filters can be added for specific printers.
       const device = await navigator.usb.requestDevice({ filters: [] });
-      await device.open();
-      await device.selectConfiguration(1);
-      await device.claimInterface(0);
+      await device.open(); // Open the device
+      await device.selectConfiguration(1); // Select configuration (usually 1)
+      await device.claimInterface(0); // Claim the first interface (usually 0)
 
+      // Find the OUT endpoint for sending data
       const endpoint = device.configuration.interfaces[0].alternate.endpoints.find(e => e.direction === 'out');
-      if (!endpoint) throw new Error("No OUT endpoint found");
+      if (!endpoint) throw new Error("No OUT endpoint found on the device.");
 
       for (let i = 0; i < copyCount; i++) {
         console.log(`[🖨] Printing copy ${i + 1} of ${copyCount}`);
+        // Send the encoded text to the printer
         await device.transferOut(endpoint.endpointNumber, encoder.encode(text));
+        // Send line feeds for spacing
         await device.transferOut(endpoint.endpointNumber, feed);
+        // Send the cut command
         await device.transferOut(endpoint.endpointNumber, cut);
       }
 
-      await device.close();
+      await device.close(); // Close the device connection
       alert(`✅ Printed ${copyCount} copies successfully.`);
     } catch (err) {
       console.error("[❌ WebUSB Error] ", err);
+      // Use alert for user feedback, as per your existing code
       alert("Printing failed: " + err.message);
     }
-  }, [copyCount]);
+  }, [copyCount]); // Dependency array for useCallback
 
-  // Ctrl+P or Cmd+P shortcut
+  // Ctrl+P or Cmd+P shortcut for printing
   useEffect(() => {
     const handleKeydown = (e) => {
       const isMac = navigator.platform.includes('Mac');
       const isPrintShortcut = (isMac && e.metaKey) || (!isMac && e.ctrlKey);
       if (isPrintShortcut && e.key.toLowerCase() === 'p') {
-        e.preventDefault();
+        e.preventDefault(); // Prevent browser's default print dialog
         handleWebUSBPrint();
       }
     };
     window.addEventListener('keydown', handleKeydown);
     return () => window.removeEventListener('keydown', handleKeydown);
-  }, [handleWebUSBPrint]);
+  }, [handleWebUSBPrint]); // Dependency array for useEffect
 
   const handleFileChange = (event) => {
     const file = event.target.files[0];
     if (file) {
+      console.log("App: File selected:", file.name, "Size:", file.size, "Type:", file.type);
       setStatus(`Reading ${file.name}...`);
       const reader = new FileReader();
+
       reader.onload = (e) => {
-        const content = e.target.result;
-        const data = parseTallyXML(content);
+        console.log("App: FileReader onload triggered.");
+        const content = e.target.result; // <--- CHANGE HERE: Read as text string
+        if (!content || content.length === 0) {
+            console.error("App: FileReader read an empty or invalid string.");
+            setXmlData(null);
+            setStatus(`Error: File ${file.name} is empty or unreadable.`);
+            return;
+        }
+        console.log("App: Content length:", content.length, "characters.");
+
+        // Pass the text string directly to parseTallyXML
+        const data = parseTallyXML(content); // <--- CHANGE HERE: Pass string
         if (data) {
+          console.log("App: parseTallyXML returned data successfully.");
           setXmlData(data);
           setStatus(`Successfully parsed ${file.name}. Ready to print.`);
         } else {
+          console.error("App: parseTallyXML returned null. Parsing failed.");
           setXmlData(null);
-          setStatus(`Error: Failed to parse ${file.name}.`);
+          setStatus(`Error: Failed to parse ${file.name}. Please check the XML format or encoding.`);
         }
       };
-      reader.readAsText(file);
+      reader.onerror = (e) => {
+        console.error("App: FileReader error:", e);
+        setXmlData(null);
+        setStatus(`Error reading file: ${e.target.error.name} - ${e.target.error.message}`);
+      };
+      reader.readAsText(file); // <--- CHANGE HERE: Read as text
+    } else {
+        console.log("App: No file selected.");
     }
   };
 

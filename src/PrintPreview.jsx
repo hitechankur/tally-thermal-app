@@ -1,9 +1,13 @@
-import React from 'react';
+// src/PrintPreview.jsx
 
-function formatINR(value) {
-  const number = parseFloat(value);
-  return isNaN(number) ? '' : `₹${number.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
-}
+import React from 'react';
+import { formatINR } from './utils/formatters'; // <--- IMPORTANT: Import formatINR from the utility file
+
+// REMOVE THE formatINR FUNCTION DEFINITION FROM HERE!
+// function formatINR(value) {
+//   const number = parseFloat(value);
+//   return isNaN(number) ? '' : `₹${number.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`;
+// }
 
 export default function PrintPreview({ data, settings, printRef }) {
   if (!data) {
@@ -82,7 +86,7 @@ export default function PrintPreview({ data, settings, printRef }) {
         <div key={index}>
           <p className="font-bold">{`${index + 1}. ${item.name}`}</p>
           <div className="flex justify-between">
-            <span>{`     ${item.qty} x ${formatINR(item.rate)} =`}</span>
+            <span>{`      ${item.qty} x ${formatINR(item.rate)} =`}</span>
             <span className="text-right">{formatINR(item.amount)}</span>
           </div>
         </div>
@@ -128,14 +132,13 @@ export default function PrintPreview({ data, settings, printRef }) {
       <p>{separator}</p>
 
       <div className="text-center text-sm mt-2">
-  {data.narration && (
-    <>
-
-      <p className="font-bold mt-2">Remarks:</p>
-      <p style={{ whiteSpace: 'pre-wrap' }}>{data.narration}</p>
-       <p>{separator}</p>
-    </>
-  )}
+        {data.narration && (
+          <>
+            <p className="font-bold mt-2">Remarks:</p>
+            <p style={{ whiteSpace: 'pre-wrap' }}>{data.narration}</p>
+            <p>{separator}</p>
+          </>
+        )}
 
         <p>Thank you for your business!</p>
       </div>

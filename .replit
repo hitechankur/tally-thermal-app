@@ -10,3 +10,21 @@ externalPort = 3000
 [[ports]]
 localPort = 5000
 externalPort = 80
+
+# --- ADD THIS SECTION ---
+[commands]
+# This command will start your Vite development server.
+# It uses 'wait-on' to ensure the server is ready before Replit considers the run successful.
+run = "npm run dev & wait-on http://localhost:5000"
+
+[workflows]
+
+[[workflows.workflow]]
+name = "node.js"
+mode = "sequential"
+author = 45682936
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "npm run dev & wait-on http://localhost:5000"
+# --- END ADDED SECTION ---

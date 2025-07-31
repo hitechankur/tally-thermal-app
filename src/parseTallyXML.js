@@ -1,4 +1,4 @@
-// src/parseTallyXML.js
+// 📁 File: src/parseTallyXML.js
 
 export default function parseTallyXML(xmlString) {
   try {
@@ -35,21 +35,63 @@ export default function parseTallyXML(xmlString) {
       return isNaN(parseFloat(qty)) ? '0' : qty;
     };
 
-    // Helper to parse item details from different inventory entry lists
-    const parseItems = (tag) =>
-      getAll(tag, voucher).map((el) => {
+    // Helper to parse item details from a specific inventory entry list
+    // This now expects a NodeList (or array) of elements, not a single element
+    const parseItemsFromList = (listElements) => {
+      if (!listElements || listElements.length === 0) return [];
+      return Array.from(listElements).map((el) => { // Ensure it's iterable
         const qty = parseQty(get('ACTUALQTY', el));
         const rate = parseFloat(get('RATE', el)?.split('/')[0] || 0).toFixed(2);
-        const amount = Math.abs(parseFloat(get('AMOUNT', el) || 0)).toFixed(2);
+        const amount = Math.abs(parseFloat(get('AMOUNT', el) || 0)).toFixed(2); // Use Math.abs for amount
         return { name: get('STOCKITEMNAME', el), qty, rate, amount };
       });
+    };
 
-    // Collect items from all possible inventory lists
-    const items = [
-      ...parseItems('ALLINVENTORYENTRIES\\.LIST'),
-      ...parseItems('INVENTORYENTRIESIN\\.LIST'),
-      ...parseItems('INVENTORYENTRIESOUT\\.LIST'),
-    ];
+    let items = [];
+    const voucherTypeName = get('VOUCHERTYPENAME').toUpperCase();
+    const objView = get('OBJVIEW').toUpperCase();
+
+    // --- Conditional Item Parsing Logic ---
+    if (voucherTypeName.includes('STOCK JOURNAL') || objView.includes('CONSUMPTION VOUCHER VIEW')) {
+      // For Stock Journal, prioritize INVENTORYENTRIESOUT.LIST
+      // These usually represent the items being "transferred out" or "produced".
+      const inventoryEntriesOut = getAll('INVENTORYENTRIESOUT\\.LIST', voucher); // Use getAll
+      items = parseItemsFromList(inventoryEntriesOut);
+    } else if (voucherTypeName.includes('SALES ORDER') || voucherTypeName.includes('SALES')) {
+      // For Sales Orders/Sales, prioritize ALLINVENTORYENTRIES.LIST
+      // If empty, fall back to INVENTORYENTRIESOUT.LIST
+      const allInventoryEntries = getAll('ALLINVENTORYENTRIES\\.LIST', voucher); // Use getAll
+      items = parseItemsFromList(allInventoryEntries);
+      if (items.length === 0) {
+        const inventoryEntriesOut = getAll('INVENTORYENTRIESOUT\\.LIST', voucher); // Use getAll
+        items = parseItemsFromList(inventoryEntriesOut);
+      }
+    } else if (voucherTypeName.includes('MATERIAL OUT') || voucherTypeName.includes('DELIVERY')) {
+      // For Material Out/Delivery, prioritize INVENTORYENTRIESOUT.LIST
+      // If empty, fall back to ALLINVENTORYENTRIES.LIST
+      const inventoryEntriesOut = getAll('INVENTORYENTRIESOUT\\.LIST', voucher); // Use getAll
+      items = parseItemsFromList(inventoryEntriesOut);
+      if (items.length === 0) {
+        const allInventoryEntries = getAll('ALLINVENTORYENTRIES\\.LIST', voucher); // Use getAll
+        items = parseItemsFromList(allInventoryEntries);
+      }
+    } else {
+      // Fallback for other or unknown voucher types: combine all
+      const allInventoryEntries = getAll('ALLINVENTORYENTRIES\\.LIST', voucher); // Use getAll
+      const inventoryEntriesIn = getAll('INVENTORYENTRIESIN\\.LIST', voucher); // Use getAll
+      const inventoryEntriesOut = getAll('INVENTORYENTRIESOUT\\.LIST', voucher); // Use getAll
+
+      items = [
+        ...parseItemsFromList(allInventoryEntries),
+        ...parseItemsFromList(inventoryEntriesIn),
+        ...parseItemsFromList(inventoryEntriesOut),
+      ];
+    }
+
+    // Assign sNo after the final items list is determined
+    items.forEach((item, index) => {
+      item.sNo = index + 1;
+    });
 
     const subtotal = items.reduce((sum, i) => sum + parseFloat(i.amount), 0);
 
@@ -71,11 +113,11 @@ export default function parseTallyXML(xmlString) {
       : subtotal.toFixed(2); // Fallback to subtotal if party ledger not found
 
     // Determine heading based on voucher type
-    const voucherType = get('VOUCHERTYPENAME').toUpperCase();
     let heading = 'DOCUMENT';
-    if (voucherType.includes('SALES ORDER')) heading = 'SALES ORDER';
-    else if (voucherType.includes('MATERIAL OUT') || voucherType.includes('DELIVERY')) heading = 'MATERIAL CHALLAN';
-    else if (voucherType.includes('SALES')) heading = 'SALES INVOICE'; // Added for general sales
+    if (voucherTypeName.includes('SALES ORDER')) heading = 'SALES ORDER';
+    else if (voucherTypeName.includes('MATERIAL OUT') || voucherTypeName.includes('DELIVERY')) heading = 'MATERIAL CHALLAN';
+    else if (voucherTypeName.includes('SALES')) heading = 'SALES INVOICE'; // Added for general sales
+    else if (voucherTypeName.includes('STOCK JOURNAL')) heading = 'STOCK JOURNAL'; // Specific for Stock Journal
 
     // Narration (if present)
     const narration = get('NARRATION') || '';
@@ -112,4 +154,66 @@ export default function parseTallyXML(xmlString) {
 // Local helper function for date formatting
 function formatDate(d) {
   return d ? `${d.slice(6, 8)}-${d.slice(4, 6)}-${d.slice(0, 4)}` : '';
+}
+
+/**
+ * Converts a number to Indian Rupee words (simplified).
+ * This is a basic implementation and may not cover all edge cases.
+ * @param {number} num The number to convert.
+ * @returns {string} The number in words.
+ */
+function convertNumberToWords(num) {
+  const a = ['', 'one ', 'two ', 'three ', 'four ', 'five ', 'six ', 'seven ', 'eight ', 'nine ', 'ten ', 'eleven ', 'twelve ', 'thirteen ', 'fourteen ', 'fifteen ', 'sixteen ', 'seventeen ', 'eighteen ', 'nineteen '];
+  const b = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety'];
+  const c = ['hundred', 'thousand', 'lakh', 'crore'];
+
+  function inWords(n) {
+    let s = '';
+    if (n < 20) {
+      s = a[n];
+    } else {
+      s = b[Math.floor(n / 10)] + ' ' + a[n % 10];
+    }
+    return s;
+  }
+
+  let n = num.toFixed(2).toString().split('.');
+  let rupee = parseFloat(n[0]);
+  let paisa = parseFloat(n[1]);
+
+  let str = '';
+  let parts = [];
+
+  if (rupee === 0) {
+    str += 'Zero ';
+  } else {
+    if (rupee >= 10000000) { // Crores
+      parts.push(inWords(Math.floor(rupee / 10000000)) + 'crore ');
+      rupee %= 10000000;
+    }
+    if (rupee >= 100000) { // Lakhs
+      parts.push(inWords(Math.floor(rupee / 100000)) + 'lakh ');
+      rupee %= 100000;
+    }
+    if (rupee >= 1000) { // Thousands
+      parts.push(inWords(Math.floor(rupee / 1000)) + 'thousand ');
+      rupee %= 1000;
+    }
+    if (rupee >= 100) { // Hundreds
+      parts.push(inWords(Math.floor(rupee / 100)) + 'hundred ');
+      rupee %= 100;
+    }
+    if (rupee > 0) {
+      parts.push(inWords(rupee));
+    }
+    str += parts.join('').trim();
+  }
+
+  str += ' Rupees';
+
+  if (paisa > 0) {
+    str += ' and ' + inWords(paisa) + ' Paisa';
+  }
+
+  return str.trim() + ' Only';
 }

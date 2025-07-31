@@ -4,6 +4,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import Controls from './Controls';
 import PrintPreview from './PrintPreview';
 import parseTallyXML from './parseTallyXML'; // Now expects a string
+import generateEscPosCommands from './generateEscPosCommands'; // NEW: Import the ESC/POS generator
 
 export default function App() {
   const [xmlData, setXmlData] = useState(null);
@@ -14,7 +15,7 @@ export default function App() {
     fontSize: 12,
     lineHeight: 1.4,
     headerAlignment: 'center',
-    logoUrl: '',
+    logoUrl: '', // Add a default empty string for logoUrl
     lineSeparator: '-',
     zoom: 1.0,
     sectionStyles: {
@@ -25,7 +26,7 @@ export default function App() {
     }
   });
   const [isDragging, setIsDragging] = useState(false); // State for drag-and-drop visual feedback
-  const [showCosmeticControls, setShowCosmeticControls] = useState(false); // New state for toggle
+  const [showCosmeticControls, setShowCosmeticControls] = useState(false); // State for toggle
 
   const printRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -36,7 +37,8 @@ export default function App() {
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        setSettings(parsed);
+        // Merge with default settings to ensure new keys like logoUrl are present
+        setSettings(prevSettings => ({ ...prevSettings, ...parsed }));
         // Ensure copyCount is loaded correctly, with a fallback
         setCopyCount(parsed.copyCount ? Math.max(1, Math.min(9, parseInt(parsed.copyCount) || 1)) : 1);
       } catch (e) {
@@ -64,11 +66,9 @@ export default function App() {
       return;
     }
 
-    // Get the innerText from the PrintPreview component
-    const text = printRef.current.innerText;
-    const encoder = new TextEncoder(); // Encodes string to UTF-8 bytes
-    const feed = new Uint8Array([0x0A, 0x0A, 0x0A]); // Line feeds
-    const cut = new Uint8Array([0x1D, 0x56, 0x41, 0x00]); // Full cut command for ESC/POS
+    // NEW: Generate ESC/POS commands instead of getting innerText
+    // Await the asynchronous command generation
+    const escPosCommands = await generateEscPosCommands(xmlData, settings);
 
     let device; // Declare device outside try-catch to ensure it's accessible in finally
 
@@ -78,9 +78,10 @@ export default function App() {
 
       // Request permission to access a USB device.
       // Filters are important to help the user select the correct device.
-      // Replace with your printer's actual Vendor ID and Product ID.
-      // You can find these in your OS device manager or by using tools like `lsusb` on Linux.
-      const filters = []; // This should be empty for this test
+      // Use the Vendor ID and Product ID you confirmed from chrome://device-log/
+      const filters = [
+        { vendorId: 0x0483, productId: 0x5720 }, // HGS 030 Printer
+      ];
       device = await navigator.usb.requestDevice({ filters: filters });
 
       await device.open(); // Open the device
@@ -94,12 +95,8 @@ export default function App() {
       for (let i = 0; i < copyCount; i++) {
         setStatus(`[🖨] Printing copy ${i + 1} of ${copyCount}...`);
         console.log(`[🖨] Printing copy ${i + 1} of ${copyCount}`);
-        // Send the encoded text to the printer
-        await device.transferOut(endpoint.endpointNumber, encoder.encode(text));
-        // Send line feeds for spacing
-        await device.transferOut(endpoint.endpointNumber, feed);
-        // Send the cut command
-        await device.transferOut(endpoint.endpointNumber, cut);
+        // NEW: Send the generated ESC/POS commands
+        await device.transferOut(endpoint.endpointNumber, escPosCommands);
       }
 
       setStatus(`✅ Printed ${copyCount} copies successfully.`);
@@ -130,7 +127,7 @@ export default function App() {
         }
       }
     }
-  }, [copyCount, xmlData]); // Added xmlData to dependencies
+  }, [copyCount, xmlData, settings]); // Added settings to dependencies
 
   // Ctrl+P or Cmd+P shortcut for printing
   useEffect(() => {

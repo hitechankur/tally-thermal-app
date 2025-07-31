@@ -80,10 +80,7 @@ export default function App() {
       // Filters are important to help the user select the correct device.
       // Replace with your printer's actual Vendor ID and Product ID.
       // You can find these in your OS device manager or by using tools like `lsusb` on Linux.
-      const filters = [
-        { vendorId: 0x0483, productId: 0x5740 }, // Example: Replace with your printer's Vendor ID and Product ID
-        // Add more filters for other compatible printers if needed
-      ];
+      const filters = []; // This should be empty for this test
       device = await navigator.usb.requestDevice({ filters: filters });
 
       await device.open(); // Open the device

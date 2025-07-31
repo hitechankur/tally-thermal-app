@@ -1,50 +1,62 @@
 // 📁 File: src/App.jsx
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import Controls from './Controls';
-import PrintPreview from './PrintPreview';
-import parseTallyXML from './parseTallyXML'; // Now expects a string
-import generateEscPosCommands from './generateEscPosCommands'; // NEW: Import the ESC/POS generator
+import Controls from './Controls'; // Assuming Controls.jsx exists and handles settings
+import PrintPreview from './PrintPreview'; // Assuming PrintPreview.jsx exists
+import parseTallyXML from './parseTallyXML'; // Assuming parseTallyXML.js exists
+import generateEscPosCommands from './generateEscPosCommands'; // IMPORT THE EXTERNAL ESC/POS GENERATOR
 
 export default function App() {
   const [xmlData, setXmlData] = useState(null);
   const [status, setStatus] = useState('Ready. Please select a Tally XML file.');
   const [copyCount, setCopyCount] = useState(1);
-  const [settings, setSettings] = useState({
-    fontFamily: 'monospace',
-    fontSize: 12,
-    lineHeight: 1.4,
-    headerAlignment: 'center',
-    logoUrl: '', // Add a default empty string for logoUrl
-    lineSeparator: '-',
-    zoom: 1.0,
-    sectionStyles: {
-      orderInfo: {
-        labelBold: false,
-        valueBold: true
-      }
+  const [settings, setSettings] = useState(() => {
+    // Initialize settings from localStorage or defaults
+    try {
+      const saved = localStorage.getItem('tallyPrintSettings');
+      return saved ? JSON.parse(saved) : {
+        fontFamily: 'monospace',
+        fontSize: 12,
+        lineHeight: 1.4,
+        headerAlignment: 'center',
+        logoUrl: '', // Ensure logoUrl is part of settings
+        lineSeparator: '-',
+        zoom: 1.0,
+        sectionStyles: {
+          orderInfo: { labelBold: false, valueBold: true }
+        }
+      };
+    } catch (e) {
+      console.error("Failed to parse settings from localStorage, using defaults:", e);
+      return {
+        fontFamily: 'monospace',
+        fontSize: 12,
+        lineHeight: 1.4,
+        headerAlignment: 'center',
+        logoUrl: '',
+        lineSeparator: '-',
+        zoom: 1.0,
+        sectionStyles: {
+          orderInfo: { labelBold: false, valueBold: true }
+        }
+      };
     }
   });
   const [isDragging, setIsDragging] = useState(false); // State for drag-and-drop visual feedback
   const [showCosmeticControls, setShowCosmeticControls] = useState(false); // State for toggle
 
-  const printRef = useRef(null);
+  const printRef = useRef(null); // Ref for PrintPreview component
   const fileInputRef = useRef(null);
 
-  // Load settings and copyCount from localStorage
+  // Load copyCount from localStorage (separately from settings if needed)
   useEffect(() => {
     const saved = localStorage.getItem('tallyPrintSettings');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        // Merge with default settings to ensure new keys like logoUrl are present
-        setSettings(prevSettings => ({ ...prevSettings, ...parsed }));
-        // Ensure copyCount is loaded correctly, with a fallback
         setCopyCount(parsed.copyCount ? Math.max(1, Math.min(9, parseInt(parsed.copyCount) || 1)) : 1);
       } catch (e) {
-        console.error("Failed to parse settings from localStorage:", e);
-        // Reset to default if parsing fails
-        localStorage.removeItem('tallyPrintSettings');
+        console.error("Failed to parse copyCount from localStorage, using default:", e);
       }
     }
   }, []);
@@ -55,9 +67,9 @@ export default function App() {
   }, [settings, copyCount]);
 
 
-  // WebUSB Print Handler (memoized)
+  // WebUSB Print Handler
   const handleWebUSBPrint = useCallback(async () => {
-    if (!xmlData) { // Check if xmlData is loaded
+    if (!xmlData) {
       alert("Nothing to print. Please load an XML file first.");
       return;
     }
@@ -66,45 +78,39 @@ export default function App() {
       return;
     }
 
-    // NEW: Generate ESC/POS commands instead of getting innerText
-    // Await the asynchronous command generation
+    setStatus("[🖨] Generating print commands...");
+    // Call the external generateEscPosCommands function
     const escPosCommands = await generateEscPosCommands(xmlData, settings);
 
-    let device; // Declare device outside try-catch to ensure it's accessible in finally
-
+    let device;
     try {
       setStatus("[🖨] Requesting USB device...");
       console.log("[🖨] Requesting USB device...");
 
-      // Request permission to access a USB device.
-      // Filters are important to help the user select the correct device.
-      // Use the Vendor ID and Product ID you confirmed from chrome://device-log/
+      // Use your printer's specific VID/PID here
       const filters = [
         { vendorId: 0x0483, productId: 0x5720 }, // HGS 030 Printer
       ];
       device = await navigator.usb.requestDevice({ filters: filters });
 
-      await device.open(); // Open the device
-      await device.selectConfiguration(1); // Select configuration (usually 1)
-      await device.claimInterface(0); // Claim the first interface (usually 0)
+      await device.open();
+      await device.selectConfiguration(1);
+      await device.claimInterface(0);
 
-      // Find the OUT endpoint for sending data
       const endpoint = device.configuration.interfaces[0].alternate.endpoints.find(e => e.direction === 'out');
       if (!endpoint) throw new Error("No OUT endpoint found on the device.");
 
       for (let i = 0; i < copyCount; i++) {
         setStatus(`[🖨] Printing copy ${i + 1} of ${copyCount}...`);
         console.log(`[🖨] Printing copy ${i + 1} of ${copyCount}`);
-        // NEW: Send the generated ESC/POS commands
         await device.transferOut(endpoint.endpointNumber, escPosCommands);
       }
 
       setStatus(`✅ Printed ${copyCount} copies successfully.`);
-      alert(`✅ Printed ${copyCount} copies successfully.`); // Use alert for user feedback
+      alert(`✅ Printed ${copyCount} copies successfully.`);
     } catch (err) {
       console.error("[❌ WebUSB Error] ", err);
       let errorMessage = "Printing failed: " + err.message;
-
       if (err.name === 'NotFoundError') {
         errorMessage = "Printing failed: No printer selected or found. Please ensure it's connected and select it from the prompt.";
       } else if (err.name === 'SecurityError' && err.message.includes('Access denied')) {
@@ -112,22 +118,20 @@ export default function App() {
       } else if (err.message.includes('No OUT endpoint found')) {
           errorMessage = "Printing failed: Printer not configured correctly or not supported. No OUT endpoint found.";
       }
-
       setStatus(errorMessage);
-      alert(errorMessage); // Use alert for user feedback
+      alert(errorMessage);
     } finally {
       if (device && device.opened) {
         try {
-          // Release interface before closing device
           await device.releaseInterface(0);
-          await device.close(); // Close the device connection
+          await device.close();
           console.log("[🖨] USB device closed.");
         } catch (closeErr) {
           console.error("Error closing USB device:", closeErr);
         }
       }
     }
-  }, [copyCount, xmlData, settings]); // Added settings to dependencies
+  }, [copyCount, xmlData, settings]);
 
   // Ctrl+P or Cmd+P shortcut for printing
   useEffect(() => {
@@ -135,59 +139,47 @@ export default function App() {
       const isMac = navigator.platform.includes('Mac');
       const isPrintShortcut = (isMac && e.metaKey) || (!isMac && e.ctrlKey);
       if (isPrintShortcut && e.key.toLowerCase() === 'p') {
-        e.preventDefault(); // Prevent browser's default print dialog
+        e.preventDefault();
         handleWebUSBPrint();
       }
     };
     window.addEventListener('keydown', handleKeydown);
     return () => window.removeEventListener('keydown', handleKeydown);
-  }, [handleWebUSBPrint]); // Dependency array for useEffect
+  }, [handleWebUSBPrint]);
 
-  // --- File Input Handler ---
+  // File Input Handler
   const handleFileChange = (event) => {
     const file = event.target.files[0];
     if (file) {
-      console.log("App: File selected:", file.name, "Size:", file.size, "Type:", file.type);
       setStatus(`Reading ${file.name}...`);
       const reader = new FileReader();
-
       reader.onload = (e) => {
-        console.log("App: FileReader onload triggered.");
-        const content = e.target.result; // Read as text string
+        const content = e.target.result;
         if (!content || content.length === 0) {
-            console.error("App: FileReader read an empty or invalid string.");
-            setXmlData(null);
             setStatus(`Error: File ${file.name} is empty or unreadable.`);
+            setXmlData(null);
             return;
         }
-        console.log("App: Content length:", content.length, "characters.");
-
-        // Pass the text string directly to parseTallyXML
-        const data = parseTallyXML(content); // Pass string
+        const data = parseTallyXML(content);
         if (data) {
-          console.log("App: parseTallyXML returned data successfully.");
           setXmlData(data);
           setStatus(`Successfully parsed ${file.name}. Ready to print.`);
         } else {
-          console.error("App: parseTallyXML returned null. Parsing failed.");
           setXmlData(null);
           setStatus(`Error: Failed to parse ${file.name}. Please check the XML format or encoding.`);
         }
       };
       reader.onerror = (e) => {
-        console.error("App: FileReader error:", e);
         setXmlData(null);
         setStatus(`Error reading file: ${e.target.error.name} - ${e.target.error.message}`);
       };
-      reader.readAsText(file); // Read as text
-    } else {
-        console.log("App: No file selected.");
+      reader.readAsText(file);
     }
   };
 
-  // --- Drag and Drop Logic ---
+  // Drag and Drop Logic
   const handleDragOver = useCallback((e) => {
-    e.preventDefault(); // Prevent default to allow drop
+    e.preventDefault();
     e.stopPropagation();
     setIsDragging(true);
   }, []);
@@ -205,8 +197,7 @@ export default function App() {
 
     const files = e.dataTransfer.files;
     if (files && files.length > 0) {
-      const file = files[0]; // Assuming only one XML file is dropped
-      // Basic validation for XML file type
+      const file = files[0];
       if (file.type === 'application/xml' || file.name.toLowerCase().endsWith('.xml')) {
         setStatus(`Reading dropped file: ${file.name}...`);
         const reader = new FileReader();
@@ -229,7 +220,7 @@ export default function App() {
         reader.onerror = () => {
           setStatus(`Error reading dropped file: ${file.name}`);
         };
-        reader.readAsText(file); // Read the file as a plain text string
+        reader.readAsText(file);
       } else {
         setStatus('Please drop a valid XML file (.xml).');
       }

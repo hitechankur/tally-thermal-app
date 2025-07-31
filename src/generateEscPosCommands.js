@@ -179,6 +179,9 @@ export default async function generateEscPosCommands(xmlData, settings) {
     printLine(char.repeat(width));
   }
 
+  // --- Define consistent print width ---
+  const TOTAL_RECEIPT_WIDTH = 42; // Adjust this based on your printer's max characters per line
+
   // --- Start Generating Commands ---
 
   // 0. Print Logo (if provided)
@@ -193,34 +196,54 @@ export default async function generateEscPosCommands(xmlData, settings) {
   setAlignment(settings.headerAlignment);
   setBold(true);
   setDoubleSize(true);
-  if (xmlData.company.name) { // Only print if data exists
-    printLine(xmlData.company.name);
-  }
-  setDoubleSize(false); // Reset double size after company name
-  setBold(false); // Reset bold
+  if (xmlData.company.name) {
+    const companyName = xmlData.company.name;
+    // For double-sized text, characters are typically 2x wider.
+    // A very conservative estimate for double-size line length to prevent splitting mid-word.
+    // Experiment with this value (e.g., 10, 12, 14) based on your printer.
+    const DOUBLE_SIZE_CHARS_PER_LINE = 14; // This is a safe bet for most 80mm printers
 
-  if (xmlData.company.address) { // Only print if data exists
+    let remainingCompanyName = companyName;
+    while (remainingCompanyName.length > 0) {
+      let line = remainingCompanyName.substring(0, DOUBLE_SIZE_CHARS_PER_LINE);
+      // Find last space to avoid cutting words
+      const lastSpaceIndex = line.lastIndexOf(' ');
+      if (lastSpaceIndex > -1 && lastSpaceIndex > 0 && line.length === DOUBLE_SIZE_CHARS_PER_LINE) {
+        line = line.substring(0, lastSpaceIndex);
+        remainingCompanyName = remainingCompanyName.substring(lastSpaceIndex + 1);
+      } else {
+        remainingCompanyName = remainingCompanyName.substring(DOUBLE_SIZE_CHARS_PER_LINE);
+      }
+      printLine(line.trim()); // Trim to remove leading/trailing spaces from wrapping
+    }
+  }
+  setDoubleSize(false);
+  setBold(false);
+
+  if (xmlData.company.address) {
     xmlData.company.address.split('\n').forEach(line => printLine(line));
   }
-  if (xmlData.company.phone) { // Only print if data exists
+  if (xmlData.company.phone) {
     printLine(xmlData.company.phone);
   }
-  if (xmlData.company.gstin) { // Only print if data exists
+  if (xmlData.company.gstin) {
     printLine(`GSTIN: ${xmlData.company.gstin}`);
   }
-  printLine(""); // Empty line for spacing
+  printLine("");
 
   // 2. Invoice Type (Heading from parseTallyXML)
-  setAlignment('center'); // Center align heading
+  printSeparator(settings.lineSeparator || '-', TOTAL_RECEIPT_WIDTH); // Separator BEFORE heading
+  setAlignment('center');
   setBold(true);
-  if (xmlData.heading) { // Only print if data exists
+  if (xmlData.heading) {
     printLine(xmlData.heading);
   }
   setBold(false);
+  printSeparator(settings.lineSeparator || '-', TOTAL_RECEIPT_WIDTH); // Separator AFTER heading
   printLine("");
 
   // 3. Order Details
-  setAlignment('left'); // Always left for details
+  setAlignment('left');
 
   // Voucher No
   setBold(settings.sectionStyles.orderInfo.labelBold);
@@ -239,11 +262,12 @@ export default async function generateEscPosCommands(xmlData, settings) {
   commands.push(...encodeText(`Entered By: `));
   setBold(settings.sectionStyles.orderInfo.valueBold);
   printLine(`${xmlData.order.user || ''}`);
-  setBold(false); // Reset bold after order details
+  setBold(false);
+  printSeparator(settings.lineSeparator || '-', TOTAL_RECEIPT_WIDTH); // Separator AFTER Entered By
   printLine("");
 
   // 4. Party Details
-  if (xmlData.party.name) { // Only print section if party name exists
+  if (xmlData.party.name) {
     setBold(true);
     printLine("PARTY DETAILS:");
     setBold(false);
@@ -259,28 +283,28 @@ export default async function generateEscPosCommands(xmlData, settings) {
 
 
   // 5. Items Table Header
-  // Define a consistent total print width for the receipt.
-  // This value needs to be chosen based on your printer's actual characters per line.
-  // Common for 80mm paper: 42-48 characters. For 58mm: 32 characters.
-  const TOTAL_RECEIPT_WIDTH = 42; // Adjust this based on your printer's max characters per line
-
-  // Column widths for the header and item lines
   const SNO_COL_WIDTH = 3;
-  const ITEM_NAME_COL_WIDTH = 18; // Adjusted for better fit
-  const QTY_RATE_DISPLAY_MAX_LENGTH = 15; // Max length for "Qty: X @ Rs. Y" part
-  const AMOUNT_COL_WIDTH = 8; // For "Rs. Z.ZZ"
-
-  // Calculate header line string to ensure it fits TOTAL_RECEIPT_WIDTH
-  const headerLine1 = `${'S.No'.padEnd(SNO_COL_WIDTH)} ${'Item Name'.padEnd(ITEM_NAME_COL_WIDTH)}`;
-  const headerLine2 = `${'Qty/Rate'.padEnd(QTY_RATE_DISPLAY_MAX_LENGTH)} ${'Amount'.padStart(AMOUNT_COL_WIDTH)}`;
+  const ITEM_NAME_COL_WIDTH = TOTAL_RECEIPT_WIDTH - SNO_COL_WIDTH - 1; // Item name takes remaining width on first line
+  const QTY_RATE_AMOUNT_LINE_INDENT = SNO_COL_WIDTH + 1; // Indent for Qty/Rate/Amount line
 
   // Print Header
   printSeparator(settings.lineSeparator || '-', TOTAL_RECEIPT_WIDTH);
   setAlignment('left');
   setBold(true);
-  // Print header parts on separate lines if needed to fit
-  printLine(headerLine1);
-  printLine(`   ${headerLine2.trim()}`); // Indent the second part of header
+  printLine(
+    `${'S.No'.padEnd(SNO_COL_WIDTH)} ` +
+    `${'Item Name'.padEnd(ITEM_NAME_COL_WIDTH)}`
+  );
+  // Calculate remaining space for Qty/Rate/Amount header on a new line
+  const QTY_HEADER_WIDTH = 5;
+  const RATE_HEADER_WIDTH = 8;
+  const AMOUNT_HEADER_WIDTH = 8; // "Amount"
+  const QTY_RATE_AMOUNT_HEADER_SPACING = TOTAL_RECEIPT_WIDTH - QTY_RATE_AMOUNT_LINE_INDENT - QTY_HEADER_WIDTH - RATE_HEADER_WIDTH - AMOUNT_HEADER_WIDTH;
+
+  printLine(
+    `${' '.repeat(QTY_RATE_AMOUNT_LINE_INDENT)}` + // Indent for second header line
+    `${'Qty'.padEnd(QTY_HEADER_WIDTH)} ${'Rate'.padEnd(RATE_HEADER_WIDTH)} ${'Amount'.padStart(AMOUNT_HEADER_WIDTH)}`
+  );
   setBold(false);
   printSeparator(settings.lineSeparator || '-', TOTAL_RECEIPT_WIDTH);
 
@@ -289,35 +313,34 @@ export default async function generateEscPosCommands(xmlData, settings) {
     xmlData.items.forEach(item => {
       const sNo = String(item.sNo).padEnd(SNO_COL_WIDTH);
       let itemName = item.name;
-      // Ensure qty, rate, amount are numbers for toFixed, then convert to string
       const qty = parseFloat(item.qty).toFixed(2);
       const rate = parseFloat(item.rate).toFixed(2);
       const amount = parseFloat(item.amount).toFixed(2);
 
-      // First line: S.No and Item Name
+      // First line: S.No and Item Name (bold)
+      setBold(true); // Item name bold
       let currentItemNameLine = itemName.substring(0, ITEM_NAME_COL_WIDTH);
       printLine(`${sNo} ${currentItemNameLine}`);
+      setBold(false); // Reset bold
 
       // If item name is longer, print remaining parts on subsequent lines, indented
       if (itemName.length > ITEM_NAME_COL_WIDTH) {
         let remainingItemName = itemName.substring(ITEM_NAME_COL_WIDTH);
         const indentForWrappedName = ' '.repeat(SNO_COL_WIDTH + 1); // Indent to align with item name
         while (remainingItemName.length > 0) {
-          let line = remainingItemName.substring(0, ITEM_NAME_COL_WIDTH);
+          let line = remainingItemName.substring(0, TOTAL_RECEIPT_WIDTH - indentForWrappedName.length);
           printLine(`${indentForWrappedName}${line}`);
-          remainingItemName = remainingItemName.substring(ITEM_NAME_COL_WIDTH);
+          remainingItemName = remainingItemName.substring(TOTAL_RECEIPT_WIDTH - indentForWrappedName.length);
         }
       }
 
-      // Second line: Qty, Rate, Amount aligned to right
-      // Format: "Qty: --- @ Rs. rate with 2 decimal values = Rs. Amount with 2 decimal values."
-      const qtyRateAmountLine = `Qty: ${qty} @ Rs. ${rate} = Rs. ${amount}`;
+      // Second line: Qty, Rate, Amount on one line, right-aligned
+      // Format: "Qty: --- @ Rs. rate = Rs. Amount"
+      const qtyRateAmountText = `Qty: ${qty} @ Rs. ${rate} = Rs. ${amount}`;
 
       // Calculate padding to right-align the entire line
-      const paddingNeeded = Math.max(0, TOTAL_RECEIPT_WIDTH - qtyRateAmountLine.length);
-      const paddedQtyRateAmountLine = ' '.repeat(paddingNeeded) + qtyRateAmountLine;
-
-      printLine(paddedQtyRateAmountLine);
+      const paddingForRightAlign = Math.max(0, TOTAL_RECEIPT_WIDTH - qtyRateAmountText.length);
+      printLine(' '.repeat(paddingForRightAlign) + qtyRateAmountText);
       printLine(""); // Spacing after each item block
     });
   } else {
@@ -326,7 +349,7 @@ export default async function generateEscPosCommands(xmlData, settings) {
   printLine(""); // Spacing after items
 
   // 7. Totals
-  printSeparator(settings.lineSeparator || '-', TOTAL_RECEIPT_WIDTH); // Use consistent width
+  printSeparator(settings.lineSeparator || '-', TOTAL_RECEIPT_WIDTH);
   setAlignment('right');
   printLine(`Sub Total: ${xmlData.totals.subtotal || '0.00'}`);
   if (parseFloat(xmlData.totals.cgst) > 0) printLine(`CGST: ${xmlData.totals.cgst}`);
@@ -334,13 +357,12 @@ export default async function generateEscPosCommands(xmlData, settings) {
   if (parseFloat(xmlData.totals.igst) > 0) printLine(`IGST: ${xmlData.totals.igst}`);
 
   setBold(true);
-  // Changed from GRAND TOTAL and removed double size
   printLine(`TOTAL: Rs. ${xmlData.totals.total || '0.00'}`);
   setBold(false);
   printLine("");
 
   // 8. Amount in Words
-  if (xmlData.amountInWords) { // Only print if data exists
+  if (xmlData.amountInWords) {
     setAlignment('left');
     printLine(`Amount in Words:`);
     setBold(true);
@@ -349,13 +371,14 @@ export default async function generateEscPosCommands(xmlData, settings) {
     printLine("");
   }
 
-  // 9. Narration
-  if (xmlData.narration) { // Only print if data exists
-    printSeparator(settings.lineSeparator || '-', TOTAL_RECEIPT_WIDTH); // Use consistent width
-    setAlignment('left');
+  // 9. Narration (Remarks)
+  if (xmlData.narration) {
+    printSeparator(settings.lineSeparator || '-', TOTAL_RECEIPT_WIDTH);
+    setAlignment('center'); // Centrally aligned
     setBold(true);
-    printLine("Narration:");
+    printLine("Remarks:"); // Changed heading to "Remarks"
     setBold(false);
+    setAlignment('left'); // Reset to left for narration content
     // Split narration into lines if it's too long for a single line
     let currentNarration = xmlData.narration;
     while (currentNarration.length > 0) {
@@ -363,16 +386,16 @@ export default async function generateEscPosCommands(xmlData, settings) {
       printLine(line);
       currentNarration = currentNarration.substring(TOTAL_RECEIPT_WIDTH);
     }
+    printSeparator(settings.lineSeparator || '-', TOTAL_RECEIPT_WIDTH); // Separator AFTER Remarks content
     printLine("");
   }
 
   // 10. Terms and Conditions
-  if (xmlData.termsAndConditions) { // Only print if data exists
-    printSeparator(settings.lineSeparator || '-', TOTAL_RECEIPT_WIDTH); // Use consistent width
+  if (xmlData.termsAndConditions) {
+    printSeparator(settings.lineSeparator || '-', TOTAL_RECEIPT_WIDTH);
     setAlignment('center');
     printLine("Terms & Conditions:");
     setAlignment('left');
-    // Split terms into lines if too long
     let currentTerms = xmlData.termsAndConditions;
     while (currentTerms.length > 0) {
       let line = currentTerms.substring(0, TOTAL_RECEIPT_WIDTH);
@@ -384,13 +407,18 @@ export default async function generateEscPosCommands(xmlData, settings) {
 
 
   // 11. Authorized Signatory
-  if (xmlData.authorizedSignatory) { // Only print if data exists
+  if (xmlData.authorizedSignatory) {
     setAlignment('right');
     printLine("");
     printLine("");
     printLine(xmlData.authorizedSignatory);
-    printLine(""); // Extra line for spacing after signatory
+    printLine("");
   }
+
+  // 12. Thank you message
+  setAlignment('center');
+  printLine("Thank you for your business!");
+  printLine("");
 
   // Add extra line feeds at the end for paper to come out
   commands.push(LF, LF, LF, LF, LF);

@@ -2,11 +2,14 @@
 
 /**
  * Converts a string to a Uint8Array using TextEncoder.
+ * Handles common currency symbol replacement for thermal printers.
  * @param {string} text The text to encode.
  * @returns {Uint8Array} The encoded text.
  */
 function encodeText(text) {
-  return new TextEncoder().encode(text);
+  // Replace Rupee symbol with "Rs." for thermal printer compatibility
+  const processedText = text.replace(/₹/g, 'Rs. ');
+  return new TextEncoder().encode(processedText);
 }
 
 /**
@@ -42,7 +45,6 @@ async function printImage(imageUrl, printerDPI, targetWidthPx = 384) {
       const data = imageData.data; // RGBA pixel data
 
       const commands = [];
-      const ESC = 0x1B;
       const GS = 0x1D;
 
       // GS v 0 commands for raster bit image
@@ -191,75 +193,135 @@ export default async function generateEscPosCommands(xmlData, settings) {
   setAlignment(settings.headerAlignment);
   setBold(true);
   setDoubleSize(true);
-  printLine(xmlData.companyName || "YOUR COMPANY NAME");
+  printLine(xmlData.company.name || "YOUR COMPANY NAME"); // Use xmlData.company.name
   setDoubleSize(false); // Reset double size after company name
 
   setBold(false); // Reset bold
-  printLine(xmlData.companyAddress || "Your Company Address");
-  if (xmlData.companyPhone) {
-    printLine(xmlData.companyPhone);
-  }
+  // Assuming company address is not directly in xmlData.company, adding placeholder
+  printLine(xmlData.company.address || "Your Company Address"); // Add address if available in data
+  printLine(xmlData.company.phone || ""); // Add phone if available
   printLine(""); // Empty line for spacing
 
-  // 2. Invoice Type
+  // 2. Invoice Type (Heading from parseTallyXML)
   setBold(true);
-  printLine(xmlData.invoiceType || "INVOICE");
+  printLine(xmlData.heading || "DOCUMENT");
   setBold(false);
   printLine("");
 
-  // 3. Invoice Details
+  // 3. Order Details
   setAlignment('left'); // Always left for details
-  printLine(`Invoice No: ${xmlData.invoiceNumber || 'N/A'}`);
-  printLine(`Date: ${xmlData.invoiceDate || 'N/A'}`);
+  printLine(`Voucher No: ${xmlData.order.number || 'N/A'}`);
+  printLine(`Date: ${xmlData.order.date || 'N/A'}`);
+  printLine(`Entered By: ${xmlData.order.user || 'N/A'}`);
   printLine("");
 
-  // 4. Customer Details
-  setBold(true);
-  printLine("CUSTOMER:");
-  setBold(false);
-  printLine(xmlData.customerName || "Walk-in Customer");
-  if (xmlData.customerAddress) {
-    // Handle multi-line address
-    xmlData.customerAddress.split('\n').forEach(line => printLine(line));
+  // 4. Party Details
+  if (xmlData.party.name) {
+    setBold(true);
+    printLine("PARTY DETAILS:");
+    setBold(false);
+    printLine(xmlData.party.name);
+    if (xmlData.party.address) {
+      xmlData.party.address.split('\n').forEach(line => printLine(line));
+    }
+    if (xmlData.party.gstin) {
+      printLine(`GSTIN: ${xmlData.party.gstin}`);
+    }
+    printLine("");
   }
-  printLine("");
+
 
   // 5. Items Table Header
-  printSeparator(settings.lineSeparator || '-', 32);
+  // Assuming a total print width of 42 characters for better layout on 80mm printers
+  const TOTAL_PRINT_WIDTH = 42;
+  const SNO_WIDTH = 3;
+  const ITEM_NAME_COL_WIDTH = 20; // Adjusted width for item name
+  const QTY_RATE_PART_WIDTH = 10; // Combined width for Qty and Rate
+  const AMOUNT_COL_WIDTH = 8; // For Amount
+
+  // Header Line: S.No Item Name         Qty Rate    Amount
+  // S.No (3) | Item Name (20) | Qty/Rate (10) | Amount (8) = 3 + 20 + 10 + 8 + 3 spaces = 44 (adjusting TOTAL_PRINT_WIDTH)
+  // Let's re-evaluate TOTAL_PRINT_WIDTH based on the new column widths
+  const HEADER_LINE_SPACING = 3; // Spaces between S.No, Item Name, Qty/Rate, Amount
+  const CALCULATED_TOTAL_PRINT_WIDTH = SNO_WIDTH + ITEM_NAME_COL_WIDTH + QTY_RATE_PART_WIDTH + AMOUNT_COL_WIDTH + HEADER_LINE_SPACING;
+
+  printSeparator(settings.lineSeparator || '-', CALCULATED_TOTAL_PRINT_WIDTH);
+  setAlignment('left');
   setBold(true);
-  // Adjust column widths based on typical thermal printer width (e.g., 32 or 48 chars)
-  // S.No | Item Name        | Qty | Rate | Amount
-  // 4    | 16               | 4   | 6    | 8    (example for 38 char width)
-  printLine("S.No Item Name         Qty Rate    Amount"); // Adjust spacing as needed
+  printLine(
+    `${'S.No'.padEnd(SNO_WIDTH)} ` +
+    `${'Item Name'.padEnd(ITEM_NAME_COL_WIDTH)} ` +
+    `${'Qty/Rate'.padEnd(QTY_RATE_PART_WIDTH)} ` +
+    `${'Amount'.padStart(AMOUNT_COL_WIDTH)}`
+  );
   setBold(false);
-  printSeparator(settings.lineSeparator || '-', 32);
+  printSeparator(settings.lineSeparator || '-', CALCULATED_TOTAL_PRINT_WIDTH);
 
   // 6. Items List
   if (xmlData.items && xmlData.items.length > 0) {
     xmlData.items.forEach(item => {
-      // Basic formatting for items - might need more sophisticated column alignment
-      // For simplicity, just print each detail on a new line or concatenated
-      printLine(`${item.sNo}. ${item.name}`);
-      printLine(`   Qty: ${item.quantity}  Rate: ${item.rate}  Amt: ${item.amount}`);
-      printLine(""); // Spacing between items
+      const sNo = String(item.sNo).padEnd(SNO_WIDTH);
+      let itemName = item.name;
+      const qty = String(item.qty);
+      const rate = String(item.rate);
+      const amount = String(item.amount);
+
+      // First line: S.No and Item Name
+      let currentItemNameLine = itemName.substring(0, ITEM_NAME_COL_WIDTH);
+      printLine(`${sNo} ${currentItemNameLine}`);
+
+      // If item name is longer, print remaining parts on subsequent lines, indented
+      if (itemName.length > ITEM_NAME_COL_WIDTH) {
+        let remainingItemName = itemName.substring(ITEM_NAME_COL_WIDTH);
+        const indentForWrappedName = ' '.repeat(SNO_WIDTH + 1); // Indent to align with item name
+        while (remainingItemName.length > 0) {
+          let line = remainingItemName.substring(0, ITEM_NAME_COL_WIDTH);
+          printLine(`${indentForWrappedName}${line}`);
+          remainingItemName = remainingItemName.substring(ITEM_NAME_COL_WIDTH);
+        }
+      }
+
+      // Second line: Indented Qty, Rate, Amount
+      // Indentation to match the start of the item name column
+      const itemDetailIndent = ' '.repeat(SNO_WIDTH + 1); // Indent to align with item name start
+
+      // Construct Qty and Rate part
+      const qtyRatePart = `${qty} x ${rate}`;
+      // Calculate remaining space after indentation for qtyRatePart and amount
+      const availableSpaceAfterIndent = CALCULATED_TOTAL_PRINT_WIDTH - itemDetailIndent.length;
+
+      // Calculate space for qtyRatePart, ensuring it doesn't overflow
+      let qtyRateDisplay = qtyRatePart.padEnd(QTY_RATE_PART_WIDTH);
+      if (qtyRateDisplay.length > QTY_RATE_PART_WIDTH) {
+        qtyRateDisplay = qtyRateDisplay.substring(0, QTY_RATE_PART_WIDTH);
+      }
+
+      // Calculate the padding for amount to align it to the right
+      // Total characters on this line = QTY_RATE_PART_WIDTH + 1 (space) + AMOUNT_COL_WIDTH
+      // Remaining space from availableSpaceAfterIndent
+      const amountPadding = availableSpaceAfterIndent - QTY_RATE_PART_WIDTH - 1 - amount.length; // -1 for space between qtyRate and amount
+
+      const amountPadded = ' '.repeat(Math.max(0, amountPadding)) + amount;
+
+      printLine(`${itemDetailIndent}${qtyRateDisplay} ${amountPadded}`);
+      printLine(""); // Spacing after each item block
     });
   } else {
     printLine("No items found.");
-    printLine("");
   }
+  printLine(""); // Spacing after items
 
   // 7. Totals
-  printSeparator(settings.lineSeparator || '-', 32);
+  printSeparator(settings.lineSeparator || '-', CALCULATED_TOTAL_PRINT_WIDTH); // Use consistent width
   setAlignment('right');
-  printLine(`Sub Total: ${xmlData.subTotal || '0.00'}`);
-  if (xmlData.taxDetails && xmlData.taxDetails.length > 0) {
-    xmlData.taxDetails.forEach(tax => {
-      printLine(`${tax.name}: ${tax.amount}`);
-    });
-  }
+  printLine(`Sub Total: ${xmlData.totals.subtotal || '0.00'}`);
+  if (parseFloat(xmlData.totals.cgst) > 0) printLine(`CGST: ${xmlData.totals.cgst}`);
+  if (parseFloat(xmlData.totals.sgst) > 0) printLine(`SGST: ${xmlData.totals.sgst}`);
+  if (parseFloat(xmlData.totals.igst) > 0) printLine(`IGST: ${xmlData.totals.igst}`);
+
   setBold(true);
   setDoubleSize(true);
-  printLine(`GRAND TOTAL: ${xmlData.grandTotal || '0.00'}`);
+  printLine(`GRAND TOTAL: Rs. ${xmlData.totals.total || '0.00'}`); // Changed to "Rs."
   setDoubleSize(false);
   setBold(false);
   printLine("");
@@ -272,17 +334,38 @@ export default async function generateEscPosCommands(xmlData, settings) {
   setBold(false);
   printLine("");
 
-  // 9. Terms and Conditions
-  if (xmlData.termsAndConditions) {
-    printSeparator(settings.lineSeparator || '-', 32);
-    setAlignment('center');
-    printLine("Terms & Conditions:");
+  // NEW: 9. Narration
+  if (xmlData.narration) {
+    printSeparator(settings.lineSeparator || '-', CALCULATED_TOTAL_PRINT_WIDTH); // Use consistent width
     setAlignment('left');
-    printLine(xmlData.termsAndConditions);
+    setBold(true);
+    printLine("Narration:");
+    setBold(false);
+    // Split narration into lines if it's too long for a single line
+    const MAX_NARRATION_LINE_LENGTH = CALCULATED_TOTAL_PRINT_WIDTH; // Or adjust as needed
+    let currentNarration = xmlData.narration;
+    while (currentNarration.length > 0) {
+      let line = currentNarration.substring(0, MAX_NARRATION_LINE_LENGTH);
+      printLine(line);
+      currentNarration = currentNarration.substring(MAX_NARRATION_LINE_LENGTH);
+    }
     printLine("");
   }
 
-  // 10. Authorized Signatory
+
+  // 10. Terms and Conditions (Placeholder from previous version)
+  // If you have terms in your XML, you'd extract them in parseTallyXML
+  // and then print them here.
+  // For now, using a generic placeholder as it's not in your XML.
+  printSeparator(settings.lineSeparator || '-', CALCULATED_TOTAL_PRINT_WIDTH); // Use consistent width
+  setAlignment('center');
+  printLine("Terms & Conditions:");
+  setAlignment('left');
+  printLine("Goods once sold cannot be returned or exchanged."); // Generic placeholder
+  printLine("");
+
+
+  // 11. Authorized Signatory
   setAlignment('right');
   printLine("");
   printLine("");
